@@ -1,0 +1,43 @@
+import pandas as pd
+from surprise import Dataset, Reader, SVD
+
+n = 2  # Number of top recommendations to consider
+
+def getRecommendation(user):
+    # Load bot ratings
+    botRatings = pd.read_csv("bot_ratings.csv").dropna()
+
+    # Initialize Surprise reader and train on the full dataset
+    reader = Reader(rating_scale=(1, 5))
+    ratingsDataSurprise = Dataset.load_from_df(botRatings[['user_id', 'bot_id', 'rating']], reader)
+    algo = SVD(random_state=0)
+    algo.fit(ratingsDataSurprise.build_full_trainset())
+
+    # Predict ratings for all missing ratings (user-bot pairs)
+    all_predictions = [(user_id, bot_id, algo.predict(user_id, bot_id).est) 
+                       for user_id in ratingsDataSurprise.build_full_trainset().all_users()
+                       for bot_id in ratingsDataSurprise.build_full_trainset().all_items()]
+
+    # Convert predictions to DataFrame
+    pred_df = pd.DataFrame(all_predictions, columns=['user_id', 'bot_id', 'predicted_rating'])
+
+    # Fetch target user predictions
+    targetUser = pred_df[pred_df['user_id'] == user]
+
+    if targetUser.empty:
+        # If no ratings for the user (new user), recommend popular bots
+        popularBots = botRatings.groupby('bot_id')['rating'].mean().sort_values(ascending=False)
+        return popularBots.head(n).index.tolist()
+
+    # Get unseen bots (exclude the bots the target user has already rated)
+    targetUserBotlist = list(targetUser.query('predicted_rating == predicted_rating.max()').bot_id.unique())
+    unseenBots = pred_df[~pred_df['bot_id'].isin(targetUserBotlist)]
+
+    if unseenBots.empty:
+        # If no unseen bots, recommend popular bots
+        popularBots = botRatings.groupby('bot_id')['rating'].mean().sort_values(ascending=False)
+        return popularBots.head(n).index.tolist()
+
+    # Sort unseen bots by predicted rating and return top n recommendations
+    predictedRatings = unseenBots.sort_values(by='predicted_rating', ascending=False)
+    return predictedRatings.head(n)['bot_id'].tolist()
