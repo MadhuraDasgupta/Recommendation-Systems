@@ -1,0 +1,51 @@
+import pandas as pd
+import numpy as np
+from scipy.spatial.distance import pdist, squareform, jaccard
+
+def getRecommendation(user):
+    # Load the dataset and clean it
+    bot = pd.read_csv('platform_data_request.csv').drop_duplicates().dropna()
+    bot["likes"] = 1  # Assigning a value of 1 to every interaction
+
+    # Creating a user-bot interaction matrix
+    p = bot.pivot_table(index=['user_id'], columns='bot_id', values='likes').fillna(0)
+
+    # Compute Jaccard similarity matrix
+    m = 1 - squareform(pdist(p.astype(bool), jaccard))
+    sim = pd.DataFrame(m, index=p.index, columns=p.index)
+
+    # Popular bots based on overall interactions
+    popularBots = bot.groupby("bot_id")["likes"].sum().sort_values(ascending=False).head(2).index.tolist()
+
+    # Ensure the user exists in the dataset
+    if user not in p.index:
+        return popularBots  # Return popular bots if the user is not found
+
+    # Extract interactions of the target user
+    targetUserBotlist = bot.loc[bot['user_id'] == user, 'bot_id'].unique().tolist()
+
+    # Get similar users (excluding the target user)
+    similarUsers = sim[user].sort_values(ascending=False).drop(user).reset_index()
+    similarUsers.rename(columns={user: 'similarityScore'}, inplace=True)
+
+    # If no similar users exist, return popular bots
+    if similarUsers.empty:
+        return popularBots
+
+    # Merge to find bots seen by similar users
+    similarScoreUsers = bot.merge(similarUsers, how='inner', on=["user_id"])
+
+    # Get unique bots seen by similar users
+    botsDistinct = similarScoreUsers['bot_id'].unique().tolist()
+
+    # Remove already seen bots efficiently
+    botsDistinct = list(set(botsDistinct) - set(targetUserBotlist))
+
+    # Recommendation logic
+    if botsDistinct:
+        # Sort bots based on similarity score before selecting top 2
+        botReco = sorted(botsDistinct, key=lambda x: similarScoreUsers[similarScoreUsers['bot_id'] == x]['similarityScore'].max(), reverse=True)[:2]
+    else:
+        botReco = popularBots  # Fallback to popular bots if no new bots are available
+
+    return botReco
